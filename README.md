@@ -40,7 +40,7 @@ await v.delete(id);
 | 0 | Pinned | Critical facts, never expire |
 | 1 | Session | Current conversation context |
 | 2 | Semantic | Long-term memories (default) |
-| 3 | Organization | Shared team/org knowledge |
+| 3 | Organization | Shared team/org knowledge (Hivemind+) |
 
 ```typescript
 // Pin a critical fact
@@ -49,6 +49,19 @@ await v.store('User is allergic to peanuts', { tier: 0 });
 // Store session context
 await v.store('Currently debugging auth flow', { tier: 1 });
 ```
+
+## Cognitive Features by Plan
+
+| Feature | Free | Cortex ($49) | Synapse ($149) | Hivemind ($49/seat) |
+|---------|------|-------------|----------------|---------------------|
+| Store & search | ✓ | ✓ | ✓ | ✓ |
+| Neural ensembles | — | ✓ | ✓ | ✓ |
+| Temporal chains | — | ✓ | ✓ | ✓ |
+| Consolidation | — | ✓ | ✓ | ✓ |
+| Identity modeling | — | — | ✓ | ✓ |
+| Org memory (tier 3) | — | — | — | ✓ |
+
+Free tier stores and searches. Paid tiers activate cognitive features automatically. [Pricing →](https://velixarai.com/pricing)
 
 ## Per-User Memories
 
