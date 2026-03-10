@@ -52,7 +52,7 @@ await v.store('Currently debugging auth flow', { tier: 1 });
 
 ## Cognitive Features by Plan
 
-| Feature | Free | Cortex ($49) | Synapse ($149) | Hivemind ($49/seat) |
+| Feature | Free | Cortex ($29) | Synapse ($75) | Hivemind ($25/seat) |
 |---------|------|-------------|----------------|---------------------|
 | Store & search | ✓ | ✓ | ✓ | ✓ |
 | Neural ensembles | — | ✓ | ✓ | ✓ |
