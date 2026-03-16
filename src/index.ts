@@ -1,37 +1,36 @@
 /**
- * Velixar JavaScript SDK - Persistent memory for AI applications.
+ * Velixar JavaScript SDK v1.0.0
+ * Persistent cognitive memory for AI applications.
+ * Mirrors the MCP server tool taxonomy.
  */
+
+// ── Types ──
 
 export interface Memory {
   id: string;
   content: string;
   tier?: number;
-  type?: string;
   tags?: string[];
-  metadata?: Record<string, unknown>;
-  createdAt?: string;
-  updatedAt?: string;
+  created_at?: string;
+  salience?: number;
 }
 
-export interface SearchResult {
-  memories: Memory[];
-  count: number;
-}
-
-export interface ListResult {
-  memories: Memory[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+export interface SearchResult { memories: Memory[]; count?: number; }
+export interface ListResult { memories: Memory[]; cursor?: string; }
+export interface GraphEntity { id: string; entity_type: string; label: string; properties?: Record<string, unknown>; relevance?: number; }
+export interface GraphRelation { source: string; target: string; relation_type: string; weight?: number; }
+export interface TraverseResult { nodes: GraphEntity[]; edges: GraphRelation[]; }
+export interface IdentityProfile { name?: string; role?: string; expertise?: string[]; preferences?: Record<string, unknown>; }
+export interface OverviewResult { total_memories: number; cortex_nodes: number; knowledge_density: string; }
+export interface WebhookResult { stored: boolean; id?: string; event_type: string; }
+export interface ExportResult { format: string; count: number; memories?: Memory[]; content?: string; graph?: Record<string, unknown>; }
 
 export interface VelixarConfig {
   apiKey: string;
   baseUrl?: string;
-  /** Max retry attempts on transient failures (default: 3) */
+  workspaceId?: string;
   maxRetries?: number;
-  /** Enable anonymous usage telemetry (default: false) */
-  telemetry?: boolean;
+  timeout?: number;
 }
 
 export class VelixarError extends Error {
@@ -41,140 +40,164 @@ export class VelixarError extends Error {
   }
 }
 
+// ── Client ──
+
 export class Velixar {
   private apiKey: string;
   private baseUrl: string;
+  private workspaceId?: string;
   private maxRetries: number;
-  private telemetry: boolean;
+  private timeout: number;
 
   constructor(config: VelixarConfig) {
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || 'https://api.velixarai.com';
+    this.baseUrl = (config.baseUrl || 'https://api.velixarai.com').replace(/\/$/, '');
+    this.workspaceId = config.workspaceId;
     this.maxRetries = config.maxRetries ?? 3;
-    this.telemetry = config.telemetry ?? false;
+    this.timeout = config.timeout ?? 30000;
   }
 
-  private _sendTelemetry(method: string, ok: boolean, ms: number): void {
-    if (!this.telemetry) return;
-    try {
-      const body = JSON.stringify({ sdk: 'js', v: '0.2.0', m: method, ok, ms });
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-        navigator.sendBeacon(`${this.baseUrl}/telemetry`, body);
-      } else {
-        fetch(`${this.baseUrl}/telemetry`, {
-          method: 'POST', body, headers: { 'Content-Type': 'application/json' },
-          keepalive: true,
-        }).catch(() => {});
-      }
-    } catch {}
-  }
+  private async request<T>(path: string, options: RequestInit & { params?: Record<string, string> } = {}): Promise<T> {
+    const { params, ...fetchOpts } = options;
+    let url = `${this.baseUrl}${path}`;
+    if (params) {
+      const qs = new URLSearchParams(params).toString();
+      url += (url.includes('?') ? '&' : '?') + qs;
+    }
 
-  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const start = Date.now();
     let lastError: Error | undefined;
-
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const res = await fetch(`${this.baseUrl}${path}`, {
-          ...options,
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.timeout);
+        const res = await fetch(url, {
+          ...fetchOpts,
+          signal: controller.signal,
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
-            'User-Agent': 'velixar-js/0.2.0',
-            ...options.headers,
+            'User-Agent': 'velixar-js/1.0.0',
+            ...(this.workspaceId ? { 'X-Workspace-Id': this.workspaceId } : {}),
+            ...fetchOpts.headers,
           },
         });
-
-        const data = await res.json();
-        const method = path.split('?')[0].replace(/\/[a-f0-9-]{36}/g, '/:id');
-        this._sendTelemetry(method, res.ok, Date.now() - start);
+        clearTimeout(timer);
 
         if (!res.ok) {
-          // Don't retry 4xx (except 429)
-          if (res.status !== 429 && res.status >= 400 && res.status < 500) {
-            throw new VelixarError(res.status, data.error || 'Request failed');
+          const body = await res.text().catch(() => '');
+          if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+            throw new VelixarError(res.status, body.slice(0, 200));
           }
-          throw new VelixarError(res.status, data.error || 'Request failed');
+          throw new VelixarError(res.status, body.slice(0, 200));
         }
-        return data;
+        return await res.json() as T;
       } catch (err) {
         lastError = err as Error;
-        // Don't retry non-retryable errors
-        if (err instanceof VelixarError && err.status >= 400 && err.status < 500 && err.status !== 429) {
-          throw err;
-        }
-        if (attempt < this.maxRetries) {
-          await new Promise(r => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)));
-        }
+        if (err instanceof VelixarError && err.status >= 400 && err.status < 500 && err.status !== 429) throw err;
+        if (attempt < this.maxRetries) await new Promise(r => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)));
       }
     }
     throw lastError!;
   }
 
-  /** Store a memory */
-  async store(content: string, options?: {
-    userId?: string;
-    tier?: number;
-    type?: string;
-    tags?: string[];
-    metadata?: Record<string, unknown>;
-  }): Promise<{ id: string }> {
-    return this.request('/memory', {
-      method: 'POST',
-      body: JSON.stringify({
-        content,
-        user_id: options?.userId,
-        tier: options?.tier,
-        type: options?.type,
-        tags: options?.tags,
-        metadata: options?.metadata,
-      }),
-    });
+  // ── Memory CRUD ──
+
+  async store(content: string, opts?: { userId?: string; tier?: number; tags?: string[] }): Promise<{ id: string }> {
+    return this.request('/memory', { method: 'POST', body: JSON.stringify({ content, user_id: opts?.userId, tier: opts?.tier, tags: opts?.tags }) });
   }
 
-  /** Search memories */
-  async search(query: string, options?: {
-    userId?: string;
-    limit?: number;
-  }): Promise<SearchResult> {
-    const params = new URLSearchParams({ q: query });
-    if (options?.userId) params.set('user_id', options.userId);
-    if (options?.limit) params.set('limit', String(options.limit));
-    return this.request(`/memory/search?${params}`);
+  async search(query: string, opts?: { userId?: string; limit?: number }): Promise<SearchResult> {
+    const params: Record<string, string> = { q: query };
+    if (opts?.userId) params.user_id = opts.userId;
+    if (opts?.limit) params.limit = String(opts.limit);
+    return this.request('/memory/search', { params });
   }
 
-  /** List memories with pagination */
-  async list(options?: {
-    limit?: number;
-    offset?: number;
-  }): Promise<ListResult> {
-    const params = new URLSearchParams();
-    if (options?.limit) params.set('limit', String(options.limit));
-    if (options?.offset) params.set('offset', String(options.offset));
-    const qs = params.toString();
-    return this.request(`/memory/list${qs ? `?${qs}` : ''}`);
+  async list(opts?: { limit?: number; cursor?: string; userId?: string }): Promise<ListResult> {
+    const params: Record<string, string> = {};
+    if (opts?.limit) params.limit = String(opts.limit);
+    if (opts?.cursor) params.cursor = opts.cursor;
+    if (opts?.userId) params.user_id = opts.userId;
+    return this.request('/memory/list', { params });
   }
 
-  /** Get a memory by ID */
-  async get(id: string): Promise<{ memory: Memory }> {
+  async get(id: string): Promise<Memory> {
     return this.request(`/memory/${id}`);
   }
 
-  /** Update a memory */
-  async update(id: string, updates: {
-    content?: string;
-    tags?: string[];
-    metadata?: Record<string, unknown>;
-  }): Promise<{ memory: Memory }> {
-    return this.request(`/memory/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
+  async update(id: string, updates: { content?: string; tags?: string[] }): Promise<{ updated: boolean }> {
+    return this.request(`/memory/${id}`, { method: 'PATCH', body: JSON.stringify(updates) });
+  }
+
+  async delete(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/memory/${id}`, { method: 'DELETE' });
+  }
+
+  // ── Graph ──
+
+  async graphTraverse(entity: string, opts?: { depth?: number }): Promise<TraverseResult> {
+    return this.request('/graph/traverse', { method: 'POST', body: JSON.stringify({ entity, max_hops: opts?.depth ?? 2 }) });
+  }
+
+  async graphSearch(query: string, opts?: { entityType?: string; limit?: number }): Promise<{ entities: GraphEntity[] }> {
+    return this.request('/graph/search', { method: 'POST', body: JSON.stringify({ query, entity_type: opts?.entityType, limit: opts?.limit ?? 20 }) });
+  }
+
+  async graphEntities(opts?: { limit?: number }): Promise<{ entities: GraphEntity[] }> {
+    const params: Record<string, string> = {};
+    if (opts?.limit) params.limit = String(opts.limit);
+    return this.request('/graph/entities', { params });
+  }
+
+  // ── Identity ──
+
+  async getIdentity(opts?: { userId?: string }): Promise<IdentityProfile> {
+    const params: Record<string, string> = {};
+    if (opts?.userId) params.user_id = opts.userId;
+    return this.request('/memory/identity', { params });
+  }
+
+  // ── Exocortex ──
+
+  async overview(): Promise<OverviewResult> {
+    return this.request('/exocortex/overview');
+  }
+
+  async contradictions(): Promise<{ contradictions: Array<Record<string, unknown>> }> {
+    return this.request('/exocortex/contradictions');
+  }
+
+  // ── CI/CD Webhook ──
+
+  async webhook(eventType: string, content: string, opts?: { tags?: string[]; metadata?: Record<string, unknown> }): Promise<WebhookResult> {
+    return this.request('/webhook/ci', {
+      method: 'POST',
+      body: JSON.stringify({ event_type: eventType, content, tags: opts?.tags, ...opts?.metadata }),
     });
   }
 
-  /** Delete a memory */
-  async delete(id: string): Promise<{ deleted: boolean }> {
-    return this.request(`/memory/${id}`, { method: 'DELETE' });
+  // ── Import / Export ──
+
+  async exportMemories(opts?: { format?: 'json' | 'markdown'; query?: string; limit?: number; includeGraph?: boolean }): Promise<ExportResult> {
+    const params: Record<string, string> = {};
+    if (opts?.format) params.format = opts.format;
+    if (opts?.query) params.q = opts.query;
+    if (opts?.limit) params.limit = String(opts.limit);
+    if (opts?.includeGraph) params.include_graph = 'true';
+    return this.request('/memory/export', { params });
+  }
+
+  async importMemories(data: Array<{ content: string; tags?: string[]; tier?: number }>, opts?: { source?: string; defaultTags?: string[] }): Promise<{ imported: number; failed: number }> {
+    return this.request('/memory/import', {
+      method: 'POST',
+      body: JSON.stringify({ data, source: opts?.source, default_tags: opts?.defaultTags }),
+    });
+  }
+
+  // ── Health ──
+
+  async health(): Promise<Record<string, unknown>> {
+    return this.request('/health');
   }
 }
 

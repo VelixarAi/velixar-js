@@ -1,6 +1,6 @@
 {
   "name": "velixar",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Persistent memory infrastructure for AI applications",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
